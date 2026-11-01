@@ -2,7 +2,7 @@
 
 Công cụ cá nhân gồm hai phần:
 
-1. **`drive_fetch.js`** — đoạn JavaScript dán vào DevTools Console, tải toàn bộ các trang của một tài liệu Drive ở chế độ chỉ xem và đóng gói thành ZIP ngay trong trình duyệt.
+1. **`drive_fetch.js`** — đoạn JavaScript dán vào DevTools Console. Một lần dán là chạy: tự dò số trang, tải toàn bộ các trang của tài liệu Drive, tự thử lại chỗ lỗi rồi đóng gói ZIP ngay trong trình duyệt.
 2. **`build_pdf.py`** — script Python ghép các ảnh trang đó thành một file PDF duy nhất, giữ nguyên chất lượng ảnh gốc.
 
 > ⚠️ **Chỉ dùng cho tài liệu bạn được chia sẻ quyền xem.** Chế độ "chỉ xem" là thiết lập có chủ ý của người chia sẻ. Bản tải về chỉ nên để đọc cá nhân — không phát tán lại, không đăng lại, không dùng cho mục đích thương mại.
@@ -21,9 +21,10 @@ https://drive.google.com/viewer/img?id=<token>&...&page=<N>&skiphighlight=true&w
 
 `id` và `fssid` giữ nguyên cho mọi trang, chỉ `page` thay đổi, bắt đầu từ `0`. Nghĩa là không cần cuộn, không cần chờ viewer render — có thể gọi song song toàn bộ N trang.
 
-`drive_fetch.js` làm bốn việc, gói trong một lệnh `__dl.go()`:
+`drive_fetch.js` tự chạy ngay khi dán và làm năm việc:
 
 - lấy URL mẫu từ `performance.getEntriesByType('resource')` — nhờ vậy không phải tự bắt request bằng tay;
+- dò số trang bằng cách thăm dò endpoint, nên không cần biết trước tài liệu dài bao nhiêu (các trang dò được giữ lại, không tải lại);
 - tải song song với một pool giới hạn (`conc`, mặc định 6);
 - tự thử lại các trang lỗi theo nhiều vòng, mỗi vòng chờ lâu hơn và giảm số request song song;
 - đóng gói kết quả thành ZIP bằng `Blob` + tự viết header ZIP, không cần thư viện ngoài và không upload gì lên mạng.
@@ -77,40 +78,42 @@ Bấm F12, sang tab **Console**. Dropdown chọn context ở góc trên bên tr�
 
 Frame nào có `req` (hoặc `anh`) lớn hơn `0` là frame của viewer — ở lại frame đó.
 
-### Bước 2 — nạp script
+### Bước 2 — dán script, thế là xong
 
-Mở [`drive_fetch.js`](drive_fetch.js), copy toàn bộ, dán vào Console, Enter. Sửa `total` ở đầu file (hoặc sau khi nạp: `__dl.total = 630`) cho đúng số trang của tài liệu.
+Copy toàn bộ [`drive_fetch.js`](drive_fetch.js) rồi dán vào Console, Enter. **Không phải gõ thêm lệnh nào** — script tự:
 
-Nếu thấy `Chua thay request /viewer/img` thì chưa có request ảnh nào: cuộn viewer 1–2 trang rồi dán lại.
-
-### Bước 3 — kiểm tra nhanh (không bắt buộc)
-
-```js
-await __dl.test()
-```
-
-Phải thấy `HTTP 200` kèm `image/webp` hoặc `image/png`. Nếu ra `403` thì token phiên đã hết hạn — F5 trang và làm lại từ Bước 1.
-
-### Bước 4 — chạy một lệnh duy nhất
-
-```js
-await __dl.go()
-```
-
-Một lệnh làm hết: **tải song song → tự thử lại các trang lỗi (3 vòng, chờ 3s → 6s → 12s) → đóng gói và tải ZIP về.**
+1. dò số trang (khoảng 10–20 request thăm dò, không tải ảnh thừa),
+2. tải song song toàn bộ trang,
+3. tự thử lại các trang lỗi (3 vòng, chờ 3s → 6s → 12s, giảm dần số request song song),
+4. đóng gói ZIP và tải về máy.
 
 Kỳ vọng:
 
 ```
+[__dl] Dang do so trang...
+[__dl] Do duoc 630 trang.
 [__dl] Bat dau: 630 trang | conc 6 | toi da 3 vong thu lai
 [__dl] 630/630 | 43.6s | 14.4 trang/s
 [__dl] Da luu sach_1-630.zip | 40.2 MB | 630 trang
 [__dl] HOAN TAT 630/630 | 43.6s
 ```
 
-Nếu sau 3 vòng vẫn còn trang thiếu, script dừng, in danh sách trang thiếu và **không lưu ZIP**. Chạy lại `await __dl.go()` — nó chỉ tải đúng những trang còn thiếu rồi mới lưu.
+Lần đầu dán, Chrome có thể chặn vì "dán code lạ" — làm theo hướng dẫn của nó (gõ `allow pasting`) rồi dán lại.
 
-Gộp tuỳ chọn vào cùng một lệnh:
+| Nếu thấy | Nghĩa là | Xử lý |
+|---|---|---|
+| `Khong thay request /viewer/img` | Chưa cuộn trang nào, hoặc sai frame | Cuộn viewer 1–2 trang rồi dán lại |
+| `Khong do duoc so trang` | Server trả 429/5xx lúc dò, hoặc trang cuối không trả lỗi | Cuộn tới trang cuối xem số trang, rồi chạy `await __dl.go({ total: 630 })` |
+
+### Bước 3 — (tuỳ chọn) đổi tuỳ chọn hoặc điều khiển tay
+
+Script tự chạy ngay khi dán. Muốn tự tay chọn tham số thì dán dòng này **trước**:
+
+```js
+window.__dlAutorun = false
+```
+
+rồi dán `drive_fetch.js` như Bước 2, sau đó chạy:
 
 ```js
 await __dl.go({ total: 630, conc: 8, rounds: 4, quality: [1600, false] })
@@ -118,13 +121,15 @@ await __dl.go({ total: 630, conc: 8, rounds: 4, quality: [1600, false] })
 
 | Khoá | Mặc định | Ý nghĩa |
 |---|---|---|
-| `total` | `630` | số trang của tài liệu |
+| `total` | `0` | số trang; `0` = tự dò |
 | `conc` | `6` | số request song song |
 | `rounds` | `3` | số vòng thử lại trang lỗi |
 | `quality` | — | `[w, webp]`, ví dụ `[1600, false]` |
 | `save` | `true` | đặt `false` để chỉ tải, không tự lưu ZIP |
 
-### Bước 5 — ghép thành PDF
+Các lệnh lẻ (`run`, `retry`, `save`, `status`, `test`) ở mục *Dùng thủ công* bên dưới.
+
+### Bước 4 — ghép thành PDF
 
 ```bash
 python build_pdf.py "sach_1-630.zip" "sach.pdf"
@@ -176,6 +181,8 @@ await __dl.go()
 | Hiện tượng | Nguyên nhân | Xử lý |
 |---|---|---|
 | `Chua thay request /viewer/img` | Chưa có request ảnh nào | Cuộn 1–2 trang rồi dán lại |
+| `Khong do duoc so trang` | Server trả 429/5xx lúc dò, hoặc trang cuối trả ảnh rỗng | Cuộn tới trang cuối xem số trang rồi chạy `await __dl.go({ total: 630 })` |
+| Chrome không cho dán | DevTools chặn paste lần đầu | Gõ `allow pasting` vào Console, Enter, rồi dán lại |
 | `HTTP 403` | Token phiên hết hạn | F5, làm lại từ Bước 1 |
 | `HTTP 429`, nhiều trang lỗi | Gửi quá nhiều request | `go()` tự giảm tốc và thử lại; nếu vẫn lỗi, chạy `await __dl.go({ conc: 3 })` |
 | `__dl is not defined` | Sai frame, hoặc đã F5 | Chọn lại frame, dán lại script |
@@ -229,6 +236,8 @@ Sau đó cuộn từ đầu đến cuối tài liệu rồi `await __dl.save()`.
 
 ## Giới hạn đã biết
 
+- Script tự chạy ngay khi dán. Muốn nạp mà không chạy (để tự gọi `go()` với tham số), dán `window.__dlAutorun = false` trước rồi mới dán script.
+- Bước dò số trang tốn thêm khoảng log₂(N) request (630 trang ≈ 6 request), và những trang dò được giữ lại trong bộ nhớ — không tải hai lần.
 - ZIP được tạo theo chuẩn ZIP32: tối đa 65.535 trang và 4 GB. Vượt mức đó phải chia nhỏ.
 - Token `id`/`fssid` sống khoảng một giờ. Lấy được URL thì chạy luôn.
 - Đừng đóng tab khi đang chạy — mất `__dl` là mất toàn bộ ảnh đã tải.

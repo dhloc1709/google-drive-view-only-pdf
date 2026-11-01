@@ -1,21 +1,22 @@
 /* ---------------------------------------------------------------------------
- * drive_fetch.js — tải toàn bộ trang của tài liệu Google Drive ở chế độ chỉ xem.
+ * drive_fetch.js — tải toàn bộ tài liệu Google Drive ở chế độ chỉ xem thành ZIP.
  *
- * Dùng: mở tài liệu dạng /preview → F12 → Console → chọn đúng frame của viewer
- * (xem README, Bước 1) → dán toàn bộ file này → sửa `total` → chạy:
+ * Dán là chạy: mở tài liệu dạng /preview → F12 → Console → chọn đúng frame của
+ * viewer (xem README, Bước 1) → dán toàn bộ file này → Enter.
  *
- *     await __dl.go()
+ * Script tự dò số trang, tải song song, tự thử lại các trang lỗi (chờ lâu dần,
+ * giảm số request song song), rồi đóng gói ZIP và tải về. Không phải gõ thêm gì.
  *
- * Một lệnh duy nhất: tải song song, tự thử lại các trang lỗi (giảm tốc độ dần),
- * rồi đóng gói ZIP và tải về. Nếu vẫn còn trang thiếu sau các vòng thử lại,
- * script dừng và không lưu ZIP hỏng.
+ * Cần điều khiển tay thì mọi thứ nằm trong __dl:
+ *     await __dl.go({ total: 630, conc: 8, rounds: 4, quality: [1600, false] })
+ *     __dl.status()                  // đã có bao nhiêu trang, còn thiếu trang nào
+ *     window.__dlAutorun = false     // dán trước, nếu muốn nạp mà không tự chạy
  *
- * Tuỳ chọn: await __dl.go({ total: 630, conc: 8, rounds: 4, quality: [1600, false] })
  * Ảnh chỉ nằm trong RAM của tab, không upload đi đâu.
  * ------------------------------------------------------------------------- */
 (() => {
   const cap = (window.__dl = {
-    total: 630,   // số trang của tài liệu — sửa cho từng file
+    total: 0,     // 0 = tự dò số trang; đặt số cụ thể để bỏ qua bước dò
     conc: 6,      // số request song song — đừng vượt 12
     list: [],     // list[i] = trang thứ i+1; undefined = chưa tải được
     fail: [],     // số trang lỗi ở lần tải gần nhất
@@ -159,7 +160,73 @@
     return left;
   };
 
-  // --- 7. Một lệnh làm hết: tải → thử lại → lưu -----------------------------
+  // --- 7. Dò số trang bằng cách thăm dò endpoint ----------------------------
+  // true = trang i đọc được (lưu luôn vào list), false = đã qua trang cuối.
+  // 429/5xx/lỗi mạng = không kết luận được: ném ra để dò dừng, tránh cắt cụt.
+  async function probePage(i, tries = 2) {
+    let status = 0;
+    for (let t = 0; t < tries; t += 1) {
+      try {
+        const r = await fetch(url(i), { credentials: 'include' });
+        if (r.status === 401 || r.status === 403) {
+          const err = new Error(`HTTP ${r.status}`);
+          err.fatal = true;
+          throw err;
+        }
+        if (r.ok) {
+          const b = await r.blob();
+          if (b.size) {
+            cap.list[i] = { index: i + 1, blob: b, type: b.type, size: b.size };
+            return true;
+          }
+          status = 'empty';
+        } else if (r.status === 429 || r.status >= 500) {
+          status = r.status;
+        } else {
+          return false;   // 400/404/410...: đã qua trang cuối
+        }
+      } catch (err) {
+        if (err.fatal) throw err;
+        status = err.message;
+      }
+      if (t + 1 < tries) await sleep(800);
+    }
+    const err = new Error(`khong do duoc trang ${i} (${status})`);
+    err.fatal = true;
+    throw err;
+  }
+
+  cap.detectTotal = async (limit = 20000) => {
+    console.log('[__dl] Dang do so trang...');
+    try {
+      let lo = -1;
+      let hi = 1;
+      while (hi < limit && (await probePage(hi))) {
+        lo = hi;
+        hi *= 2;
+      }
+      if (hi >= limit) {
+        console.warn('[__dl] Khong tim thay trang cuoi (tai lieu qua lon?).');
+        return 0;
+      }
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (await probePage(mid)) lo = mid;
+        else hi = mid;
+      }
+      if (hi <= 0) {
+        console.warn('[__dl] Trang dau tien khong tai duoc.');
+        return 0;
+      }
+      console.log(`[__dl] Do duoc ${hi} trang.`);
+      return hi;
+    } catch (err) {
+      console.warn(`[__dl] Do so trang that bai: ${err.message}`);
+      return 0;
+    }
+  };
+
+  // --- 8. Một lệnh làm hết: dò số trang → tải → thử lại → lưu ---------------
   cap.go = async (opts = {}) => {
     const o = { total: 0, conc: 0, rounds: 3, save: true, quality: null, ...opts };
     if (o.total) cap.total = o.total;
@@ -169,6 +236,17 @@
     if (!cap.base && !resolveBase()) {
       console.warn('[__dl] Chua thay URL /viewer/img. Cuon 1-2 trang trong viewer roi chay lai.');
       return { ok: false, reason: 'no-url' };
+    }
+
+    if (!cap.total) {
+      cap.total = await cap.detectTotal();
+      if (!cap.total) {
+        console.warn(
+          '[__dl] Khong do duoc so trang. Cuon toi trang cuoi de xem so trang, ' +
+          'roi chay: await __dl.go({ total: 630 })'
+        );
+        return { ok: false, reason: 'no-total' };
+      }
     }
 
     const t0 = performance.now();
@@ -316,9 +394,18 @@
     );
   };
 
+  // --- 10. Tự chạy -----------------------------------------------------------
   if (!resolveBase()) {
-    console.warn('[__dl] Chua thay URL /viewer/img. Cuon 1-2 trang roi chay: await __dl.go()');
-  } else {
-    console.log(`[__dl] San sang: ${cap.total} trang, conc ${cap.conc}. Chay: await __dl.go()`);
+    console.warn('[__dl] Khong thay request /viewer/img o frame nay. Chon dung frame cua viewer roi dan lai.');
+    return;
   }
+  if (window.__dlAutorun === false) {
+    console.log('[__dl] San sang (tu chay da tat). Chay: await __dl.go()');
+    return;
+  }
+
+  cap.promise = cap.go().catch((err) => {
+    console.error('[__dl] Loi:', err);
+    return { ok: false, reason: 'error', error: String(err) };
+  });
 })();
