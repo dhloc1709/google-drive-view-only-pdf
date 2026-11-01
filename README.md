@@ -87,10 +87,15 @@ Copy toàn bộ [`drive_fetch.js`](drive_fetch.js) rồi dán vào Console, Ente
 3. tự thử lại các trang lỗi (3 vòng, chờ 3s → 6s → 12s, giảm dần số request song song),
 4. đóng gói ZIP và tải về máy.
 
-Kỳ vọng:
+Kỳ vọng (bước dò in từng lần thử, nên không bị "đứng im"):
 
 ```
 [__dl] Dang do so trang...
+[__dl] base: https://drive.google.com/viewer/img?id=...&page=
+[__dl] ... trang 1: co anh (58 KB)
+[__dl] ... trang 2: co anh (61 KB)
+...
+[__dl] ... trang 1024: het (HTTP 404)
 [__dl] Do duoc 630 trang.
 [__dl] Bat dau: 630 trang | conc 6 | toi da 3 vong thu lai
 [__dl] 630/630 | 43.6s | 14.4 trang/s
@@ -182,6 +187,8 @@ await __dl.go()
 |---|---|---|
 | `Chua thay request /viewer/img` | Chưa có request ảnh nào | Cuộn 1–2 trang rồi dán lại |
 | `Khong do duoc so trang` | Server trả 429/5xx lúc dò, hoặc trang cuối trả ảnh rỗng | Cuộn tới trang cuối xem số trang rồi chạy `await __dl.go({ total: 630 })` |
+| Dừng ở `... trang N: loi 429` | Bị chặn tạm khi dò | Đợi 1–2 phút, F5 rồi dán lại; hoặc đặt `total` thủ công |
+| Cần biết script gặp gì | — | `await __dl.diag()` — in URL mẫu và kết quả tải thử 2 trang |
 | Chrome không cho dán | DevTools chặn paste lần đầu | Gõ `allow pasting` vào Console, Enter, rồi dán lại |
 | `HTTP 403` | Token phiên hết hạn | F5, làm lại từ Bước 1 |
 | `HTTP 429`, nhiều trang lỗi | Gửi quá nhiều request | `go()` tự giảm tốc và thử lại; nếu vẫn lỗi, chạy `await __dl.go({ conc: 3 })` |

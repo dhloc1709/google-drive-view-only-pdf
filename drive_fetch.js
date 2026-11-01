@@ -10,6 +10,7 @@
  * Cần điều khiển tay thì mọi thứ nằm trong __dl:
  *     await __dl.go({ total: 630, conc: 8, rounds: 4, quality: [1600, false] })
  *     __dl.status()                  // đã có bao nhiêu trang, còn thiếu trang nào
+ *     await __dl.diag()              // in URL mẫu + thử tải 2 trang, khi cần chẩn đoán
  *     window.__dlAutorun = false     // dán trước, nếu muốn nạp mà không tự chạy
  *
  * Ảnh chỉ nằm trong RAM của tab, không upload đi đâu.
@@ -26,6 +27,15 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const url = (i) => cap.base + i + cap.suffix;
+
+  // Mọi request đều có timeout: một request treo không thể chặn cả lần chạy.
+  function fetchOpts(ms) {
+    const o = { credentials: 'include' };
+    if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
+      o.signal = AbortSignal.timeout(ms);
+    }
+    return o;
+  }
   const extOf = (type) => (type.split('/')[1] || 'png').replace('jpeg', 'jpg');
   const have = () => cap.list.filter(Boolean).length;
 
@@ -59,7 +69,7 @@
   };
 
   async function fetchPage(i) {
-    const r = await fetch(url(i), { credentials: 'include' });
+    const r = await fetch(url(i), fetchOpts(60000));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const b = await r.blob();
     if (!b.size) throw new Error('blob rong');
@@ -106,9 +116,10 @@
 
   // --- 3. Kiểm tra nhanh ----------------------------------------------------
   cap.test = async (n = 3) => {
-    for (let i = 0; i < Math.min(n, cap.total); i += 1) {
+    const to = Math.min(n, cap.total || n);
+    for (let i = 0; i < to; i += 1) {
       try {
-        const r = await fetch(url(i), { credentials: 'include' });
+        const r = await fetch(url(i), fetchOpts(20000));
         const b = await r.blob();
         console.log(
           `[__dl] page=${i} | HTTP ${r.status} | ${b.type || '(rong)'} | ` +
@@ -167,7 +178,7 @@
     let status = 0;
     for (let t = 0; t < tries; t += 1) {
       try {
-        const r = await fetch(url(i), { credentials: 'include' });
+        const r = await fetch(url(i), fetchOpts(20000));
         if (r.status === 401 || r.status === 403) {
           const err = new Error(`HTTP ${r.status}`);
           err.fatal = true;
@@ -177,18 +188,21 @@
           const b = await r.blob();
           if (b.size) {
             cap.list[i] = { index: i + 1, blob: b, type: b.type, size: b.size };
+            console.log(`[__dl] ... trang ${i}: co anh (${(b.size / 1024).toFixed(0)} KB)`);
             return true;
           }
           status = 'empty';
         } else if (r.status === 429 || r.status >= 500) {
           status = r.status;
         } else {
+          console.log(`[__dl] ... trang ${i}: het (HTTP ${r.status})`);
           return false;   // 400/404/410...: đã qua trang cuối
         }
       } catch (err) {
         if (err.fatal) throw err;
-        status = err.message;
+        status = err.name === 'TimeoutError' ? 'timeout' : err.message;
       }
+      console.log(`[__dl] ... trang ${i}: loi ${status}`);
       if (t + 1 < tries) await sleep(800);
     }
     const err = new Error(`khong do duoc trang ${i} (${status})`);
@@ -198,6 +212,7 @@
 
   cap.detectTotal = async (limit = 20000) => {
     console.log('[__dl] Dang do so trang...');
+    console.log('[__dl] base:', cap.base);
     try {
       let lo = -1;
       let hi = 1;
@@ -221,7 +236,7 @@
       console.log(`[__dl] Do duoc ${hi} trang.`);
       return hi;
     } catch (err) {
-      console.warn(`[__dl] Do so trang that bai: ${err.message}`);
+      console.log(`[__dl] Do so trang that bai: ${err.message}`);
       return 0;
     }
   };
@@ -241,7 +256,7 @@
     if (!cap.total) {
       cap.total = await cap.detectTotal();
       if (!cap.total) {
-        console.warn(
+        console.log(
           '[__dl] Khong do duoc so trang. Cuon toi trang cuoi de xem so trang, ' +
           'roi chay: await __dl.go({ total: 630 })'
         );
@@ -394,9 +409,29 @@
     );
   };
 
+  // --- 9b. Chẩn đoán nhanh ----------------------------------------------------
+  cap.diag = async () => {
+    if (!cap.base) resolveBase();
+    const entries = performance.getEntriesByType('resource')
+      .filter((e) => e.name.includes('/viewer/img'));
+    console.log('[__dl] so request /viewer/img trong frame nay:', entries.length);
+    console.log('[__dl] base:', cap.base);
+    console.log('[__dl] suffix:', cap.suffix);
+    if (!cap.base) return;
+    for (const p of [0, 1]) {
+      try {
+        const r = await fetch(url(p), fetchOpts(20000));
+        const b = await r.blob();
+        console.log(`[__dl] page=${p} | HTTP ${r.status} | ${b.type || '(rong)'} | ${b.size} bytes`);
+      } catch (err) {
+        console.log(`[__dl] page=${p} | LOI ${err.name}: ${err.message}`);
+      }
+    }
+  };
+
   // --- 10. Tự chạy -----------------------------------------------------------
   if (!resolveBase()) {
-    console.warn('[__dl] Khong thay request /viewer/img o frame nay. Chon dung frame cua viewer roi dan lai.');
+    console.log('[__dl] Khong thay request /viewer/img o frame nay. Chon dung frame cua viewer roi dan lai.');
     return;
   }
   if (window.__dlAutorun === false) {
