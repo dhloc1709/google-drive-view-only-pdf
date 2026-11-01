@@ -63,7 +63,7 @@
 
   cap.status = () => {
     console.log(
-      `[__dl] ${have()}/${cap.total} trang | thieu ${cap.missing().length} | ` +
+      `[__dl] ${have()}/${cap.total} pages | missing ${cap.missing().length} | ` +
       `conc ${cap.conc} | suffix ${cap.suffix}`
     );
   };
@@ -72,7 +72,7 @@
     const r = await fetch(url(i), fetchOpts(60000));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const b = await r.blob();
-    if (!b.size) throw new Error('blob rong');
+    if (!b.size) throw new Error('empty blob');
     return { index: i + 1, blob: b, type: b.type, size: b.size };
   }
 
@@ -107,7 +107,7 @@
         const s = (performance.now() - t0) / 1000;
         console.log(
           `[__dl] ${done}/${indices.length} | ${s.toFixed(1)}s | ` +
-          `${(done / s).toFixed(1)} trang/s`
+          `${(done / s).toFixed(1)} pages/s`
         );
       }
     });
@@ -122,11 +122,11 @@
         const r = await fetch(url(i), fetchOpts(20000));
         const b = await r.blob();
         console.log(
-          `[__dl] page=${i} | HTTP ${r.status} | ${b.type || '(rong)'} | ` +
+          `[__dl] page=${i} | HTTP ${r.status} | ${b.type || '(empty)'} | ` +
           `${(b.size / 1024).toFixed(0)} KB`
         );
       } catch (err) {
-        console.log(`[__dl] page=${i} | loi: ${err.message}`);
+        console.log(`[__dl] page=${i} | error: ${err.message}`);
       }
     }
   };
@@ -136,7 +136,7 @@
     cap.suffix = cap.suffix
       .replace(/\bw=\d+/, `w=${w}`)
       .replace(/webp=(true|false)/, `webp=${webp}`);
-    console.log('[__dl] suffix moi:', cap.suffix);
+    console.log('[__dl] new suffix:', cap.suffix);
   };
 
   // --- 5. Tải toàn bộ (không thử lại) ---------------------------------------
@@ -145,9 +145,9 @@
     for (let i = from; i < Math.min(to, cap.total); i += 1) indices.push(i);
     cap.fail = [];
     const s = await downloadIndices(indices);
-    console.log(`[__dl] XONG ${have()}/${cap.total} | ${s.toFixed(1)}s | loi: ${cap.fail.length}`);
+    console.log(`[__dl] DONE ${have()}/${cap.total} | ${s.toFixed(1)}s | errors: ${cap.fail.length}`);
     if (cap.fail.length && cap.fail.length <= 40) {
-      console.log('[__dl] trang loi:', cap.fail.join(', '));
+      console.log('[__dl] failed pages:', cap.fail.join(', '));
     }
   };
 
@@ -155,7 +155,7 @@
   cap.retry = async (conc = 2) => {
     const bad = cap.missing();
     if (!bad.length) {
-      console.log('[__dl] Khong con trang nao thieu.');
+      console.log('[__dl] No missing pages.');
       return 0;
     }
     const saved = cap.conc;
@@ -167,7 +167,7 @@
       cap.conc = saved;
     }
     const left = cap.missing().length;
-    console.log(`[__dl] Thu lai ${bad.length} trang | con thieu ${left}`);
+    console.log(`[__dl] Retrying ${bad.length} pages | still missing ${left}`);
     return left;
   };
 
@@ -188,30 +188,30 @@
           const b = await r.blob();
           if (b.size) {
             cap.list[i] = { index: i + 1, blob: b, type: b.type, size: b.size };
-            console.log(`[__dl] ... trang ${i}: co anh (${(b.size / 1024).toFixed(0)} KB)`);
+            console.log(`[__dl] ... page ${i}: ok (${(b.size / 1024).toFixed(0)} KB)`);
             return true;
           }
           status = 'empty';
         } else if (r.status === 429 || r.status >= 500) {
           status = r.status;
         } else {
-          console.log(`[__dl] ... trang ${i}: het (HTTP ${r.status})`);
+          console.log(`[__dl] ... page ${i}: end of document (HTTP ${r.status})`);
           return false;   // 400/404/410...: đã qua trang cuối
         }
       } catch (err) {
         if (err.fatal) throw err;
         status = err.name === 'TimeoutError' ? 'timeout' : err.message;
       }
-      console.log(`[__dl] ... trang ${i}: loi ${status}`);
+      console.log(`[__dl] ... page ${i}: failed (${status})`);
       if (t + 1 < tries) await sleep(800);
     }
-    const err = new Error(`khong do duoc trang ${i} (${status})`);
+    const err = new Error(`could not probe page ${i} (${status})`);
     err.fatal = true;
     throw err;
   }
 
   cap.detectTotal = async (limit = 20000) => {
-    console.log('[__dl] Dang do so trang...');
+    console.log('[__dl] Detecting page count...');
     console.log('[__dl] base:', cap.base);
     try {
       let lo = -1;
@@ -221,7 +221,7 @@
         hi *= 2;
       }
       if (hi >= limit) {
-        console.warn('[__dl] Khong tim thay trang cuoi (tai lieu qua lon?).');
+        console.warn('[__dl] Could not find the last page (document too large?).');
         return 0;
       }
       while (hi - lo > 1) {
@@ -230,13 +230,13 @@
         else hi = mid;
       }
       if (hi <= 0) {
-        console.warn('[__dl] Trang dau tien khong tai duoc.');
+        console.warn('[__dl] The first page could not be loaded.');
         return 0;
       }
-      console.log(`[__dl] Do duoc ${hi} trang.`);
+      console.log(`[__dl] Detected ${hi} pages.`);
       return hi;
     } catch (err) {
-      console.log(`[__dl] Do so trang that bai: ${err.message}`);
+      console.log(`[__dl] Page count detection failed: ${err.message}`);
       return 0;
     }
   };
@@ -249,7 +249,7 @@
     if (o.quality) cap.setQuality(o.quality[0], o.quality[1]);
 
     if (!cap.base && !resolveBase()) {
-      console.warn('[__dl] Chua thay URL /viewer/img. Cuon 1-2 trang trong viewer roi chay lai.');
+      console.warn('[__dl] No /viewer/img URL yet. Scroll 1-2 pages in the viewer and run again.');
       return { ok: false, reason: 'no-url' };
     }
 
@@ -257,8 +257,8 @@
       cap.total = await cap.detectTotal();
       if (!cap.total) {
         console.log(
-          '[__dl] Khong do duoc so trang. Cuon toi trang cuoi de xem so trang, ' +
-          'roi chay: await __dl.go({ total: 630 })'
+          '[__dl] Could not detect the page count. Scroll to the last page to read it, ' +
+          'then run: await __dl.go({ total: 630 })'
         );
         return { ok: false, reason: 'no-total' };
       }
@@ -266,8 +266,8 @@
 
     const t0 = performance.now();
     console.log(
-      `[__dl] Bat dau: ${cap.total} trang | conc ${cap.conc} | ` +
-      `toi da ${o.rounds} vong thu lai`
+      `[__dl] Starting: ${cap.total} pages | conc ${cap.conc} | ` +
+      `up to ${o.rounds} retry rounds`
     );
 
     cap.fail = [];
@@ -280,8 +280,8 @@
       round += 1;
       const wait = Math.min(3000 * 2 ** (round - 1), 15000);
       console.log(
-        `[__dl] Vong ${round}/${o.rounds}: thieu ${cap.missing().length} trang, ` +
-        `doi ${Math.round(wait / 1000)}s roi thu lai`
+        `[__dl] Round ${round}/${o.rounds}: ${cap.missing().length} pages missing, ` +
+        `waiting ${Math.round(wait / 1000)}s before retry`
       );
       await sleep(wait);
       if (!(await cap.retry(2))) break;
@@ -292,20 +292,20 @@
 
     if (missing.length) {
       console.warn(
-        `[__dl] DUNG sau ${seconds}s: con thieu ${missing.length} trang, chua luu ZIP. ` +
-        'Chay lai await __dl.go() de thu tiep (chi tai trang con thieu).'
+        `[__dl] STOPPED after ${seconds}s: ${missing.length} pages missing, ZIP not saved. ` +
+        'Run await __dl.go() again to retry (missing pages only).'
       );
-      if (missing.length <= 40) console.warn('[__dl] trang thieu:', missing.join(', '));
+      if (missing.length <= 40) console.warn('[__dl] missing pages:', missing.join(', '));
       const tail = missing[missing.length - 1] === cap.total &&
         missing.every((p, k) => k === 0 || p === missing[k - 1] + 1);
       if (tail) {
-        console.warn('[__dl] Cac trang thieu nam lien nhau o cuoi: co the `total` dang lon hon so trang thuc te.');
+        console.warn('[__dl] Missing pages form a contiguous tail: `total` may be larger than the real page count.');
       }
       return { ok: false, reason: 'missing', missing, seconds };
     }
 
     if (o.save) await cap.save();
-    console.log(`[__dl] HOAN TAT ${cap.total}/${cap.total} | ${seconds}s`);
+    console.log(`[__dl] COMPLETE ${cap.total}/${cap.total} | ${seconds}s`);
     return { ok: true, pages: cap.total, seconds };
   };
 
@@ -380,13 +380,13 @@
   cap.save = async (limit = Infinity) => {
     const items = cap.list.filter(Boolean).slice(0, limit);
     if (!items.length) {
-      console.warn('[__dl] Chua co trang nao.');
+      console.warn('[__dl] No pages collected yet.');
       return;
     }
 
     const missing = cap.missing().length;
     if (missing) {
-      console.warn(`[__dl] CANH BAO: con thieu ${missing} trang, ZIP se khong day du.`);
+      console.warn(`[__dl] WARNING: ${missing} pages missing, the ZIP will be incomplete.`);
     }
 
     const files = items.map((it) => ({
@@ -405,7 +405,7 @@
     setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
 
     console.log(
-      `[__dl] Da luu ${a.download} | ${(zip.size / 1048576).toFixed(1)} MB | ${files.length} trang`
+      `[__dl] Saved ${a.download} | ${(zip.size / 1048576).toFixed(1)} MB | ${files.length} pages`
     );
   };
 
@@ -414,7 +414,7 @@
     if (!cap.base) resolveBase();
     const entries = performance.getEntriesByType('resource')
       .filter((e) => e.name.includes('/viewer/img'));
-    console.log('[__dl] so request /viewer/img trong frame nay:', entries.length);
+    console.log('[__dl] /viewer/img resource entries in this frame:', entries.length);
     console.log('[__dl] base:', cap.base);
     console.log('[__dl] suffix:', cap.suffix);
     if (!cap.base) return;
@@ -422,25 +422,25 @@
       try {
         const r = await fetch(url(p), fetchOpts(20000));
         const b = await r.blob();
-        console.log(`[__dl] page=${p} | HTTP ${r.status} | ${b.type || '(rong)'} | ${b.size} bytes`);
+        console.log(`[__dl] page=${p} | HTTP ${r.status} | ${b.type || '(empty)'} | ${b.size} bytes`);
       } catch (err) {
-        console.log(`[__dl] page=${p} | LOI ${err.name}: ${err.message}`);
+        console.log(`[__dl] page=${p} | ERROR ${err.name}: ${err.message}`);
       }
     }
   };
 
   // --- 10. Tự chạy -----------------------------------------------------------
   if (!resolveBase()) {
-    console.log('[__dl] Khong thay request /viewer/img o frame nay. Chon dung frame cua viewer roi dan lai.');
+    console.log('[__dl] No /viewer/img request in this frame. Select the viewer frame and paste again.');
     return;
   }
   if (window.__dlAutorun === false) {
-    console.log('[__dl] San sang (tu chay da tat). Chay: await __dl.go()');
+    console.log('[__dl] Ready (autorun disabled). Run: await __dl.go()');
     return;
   }
 
   cap.promise = cap.go().catch((err) => {
-    console.error('[__dl] Loi:', err);
+    console.error('[__dl] Error:', err);
     return { ok: false, reason: 'error', error: String(err) };
   });
 })();

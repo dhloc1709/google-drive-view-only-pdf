@@ -85,7 +85,7 @@ Có hai bản, nội dung y hệt nhau:
 | Bản | Dùng khi nào |
 |---|---|
 | [`drive_fetch.min.js`](drive_fetch.min.js) | một dòng, 8 KB — bản đưa cho đồng nghiệp dán |
-| [`drive_fetch.js`](drive_fetch.js) | 411 dòng, có chú thích — bản để đọc và sửa |
+| [`drive_fetch.js`](drive_fetch.js) | 446 dòng, có chú thích — bản để đọc và sửa |
 
 Copy toàn bộ một trong hai, dán vào Console, Enter. **Không phải gõ thêm lệnh nào** — script tự:
 
@@ -97,17 +97,17 @@ Copy toàn bộ một trong hai, dán vào Console, Enter. **Không phải gõ t
 Kỳ vọng (bước dò in từng lần thử, nên không bị "đứng im"):
 
 ```
-[__dl] Dang do so trang...
+[__dl] Detecting page count...
 [__dl] base: https://drive.google.com/viewer/img?id=...&page=
-[__dl] ... trang 1: co anh (58 KB)
-[__dl] ... trang 2: co anh (61 KB)
+[__dl] ... page 1: ok (58 KB)
+[__dl] ... page 2: ok (61 KB)
 ...
-[__dl] ... trang 1024: het (HTTP 404)
-[__dl] Do duoc 630 trang.
-[__dl] Bat dau: 630 trang | conc 6 | toi da 3 vong thu lai
-[__dl] 630/630 | 43.6s | 14.4 trang/s
-[__dl] Da luu sach_1-630.zip | 40.2 MB | 630 trang
-[__dl] HOAN TAT 630/630 | 43.6s
+[__dl] ... page 1024: end of document (HTTP 404)
+[__dl] Detected 630 pages.
+[__dl] Starting: 630 pages | conc 6 | up to 3 retry rounds
+[__dl] 630/630 | 43.6s | 14.4 pages/s
+[__dl] Saved sach_1-630.zip | 40.2 MB | 630 pages
+[__dl] COMPLETE 630/630 | 43.6s
 ```
 
 Dòng `undefined` hiện ngay sau khi dán là giá trị trả về của đoạn code — không phải lỗi, các dòng log vẫn chạy tiếp bên dưới nó.
@@ -118,8 +118,8 @@ Lần đầu dán, Chrome có thể chặn vì "dán code lạ" — làm theo h�
 
 | Nếu thấy | Nghĩa là | Xử lý |
 |---|---|---|
-| `Khong thay request /viewer/img` | Chưa cuộn trang nào, hoặc sai frame | Cuộn viewer 1–2 trang rồi dán lại |
-| `Khong do duoc so trang` | Server trả 429/5xx lúc dò, hoặc trang cuối không trả lỗi | Cuộn tới trang cuối xem số trang, rồi chạy `await __dl.go({ total: 630 })` |
+| `No /viewer/img request in this frame` | Chưa cuộn trang nào, hoặc sai frame | Cuộn viewer 1–2 trang rồi dán lại |
+| `Could not detect the page count` | Server trả 429/5xx lúc dò, hoặc trang cuối không trả lỗi | Cuộn tới trang cuối xem số trang, rồi chạy `await __dl.go({ total: 630 })` |
 
 ### Bước 3 — (tuỳ chọn) đổi tuỳ chọn hoặc điều khiển tay
 
@@ -203,9 +203,9 @@ await __dl.go()
 
 | Hiện tượng | Nguyên nhân | Xử lý |
 |---|---|---|
-| `Chua thay request /viewer/img` | Chưa có request ảnh nào | Cuộn 1–2 trang rồi dán lại |
-| `Khong do duoc so trang` | Server trả 429/5xx lúc dò, hoặc trang cuối trả ảnh rỗng | Cuộn tới trang cuối xem số trang rồi chạy `await __dl.go({ total: 630 })` |
-| Dừng ở `... trang N: loi 429` | Bị chặn tạm khi dò | Đợi 1–2 phút, F5 rồi dán lại; hoặc đặt `total` thủ công |
+| `No /viewer/img request in this frame` | Chưa có request ảnh nào | Cuộn 1–2 trang rồi dán lại |
+| `Could not detect the page count` | Server trả 429/5xx lúc dò, hoặc trang cuối trả ảnh rỗng | Cuộn tới trang cuối xem số trang rồi chạy `await __dl.go({ total: 630 })` |
+| Dừng ở `... page N: failed (429)` | Bị chặn tạm khi dò | Đợi 1–2 phút, F5 rồi dán lại; hoặc đặt `total` thủ công |
 | Cần biết script gặp gì | — | `await __dl.diag()` — in URL mẫu và kết quả tải thử 2 trang |
 | Chrome không cho dán | DevTools chặn paste lần đầu | Gõ `allow pasting` vào Console, Enter, rồi dán lại |
 | `HTTP 403` | Token phiên hết hạn | F5, làm lại từ Bước 1 |
