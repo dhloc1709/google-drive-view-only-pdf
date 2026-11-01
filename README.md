@@ -21,11 +21,14 @@ https://drive.google.com/viewer/img?id=<token>&...&page=<N>&skiphighlight=true&w
 
 `id` và `fssid` giữ nguyên cho mọi trang, chỉ `page` thay đổi, bắt đầu từ `0`. Nghĩa là không cần cuộn, không cần chờ viewer render — có thể gọi song song toàn bộ N trang.
 
-`drive_fetch.js` làm ba việc:
+`drive_fetch.js` làm bốn việc, gói trong một lệnh `__dl.go()`:
 
 - lấy URL mẫu từ `performance.getEntriesByType('resource')` — nhờ vậy không phải tự bắt request bằng tay;
 - tải song song với một pool giới hạn (`conc`, mặc định 6);
+- tự thử lại các trang lỗi theo nhiều vòng, mỗi vòng chờ lâu hơn và giảm số request song song;
 - đóng gói kết quả thành ZIP bằng `Blob` + tự viết header ZIP, không cần thư viện ngoài và không upload gì lên mạng.
+
+Toàn bộ chạy trong RAM của tab. Nếu sau các vòng thử lại vẫn còn trang thiếu, script dừng và **không lưu ZIP** — thà không có file còn hơn có file PDF thiếu trang mà không biết.
 
 `build_pdf.py` ghép ảnh thành PDF. Điểm đáng chú ý: phần lớn trang là **PNG 8-bit không alpha**, và luồng nén bên trong PNG trùng đúng định dạng mà bộ lọc `Predictor 15` của PDF mong đợi. Vì vậy script nhúng **nguyên xi** luồng nén vào PDF (`/FlateDecode` + `/DecodeParms`), không giải mã rồi nén lại — không mất một điểm ảnh nào và gần như không tốn CPU. Chỉ trang WEBP/JPEG mới phải giải mã và mã hoá lại thành JPEG (tự chọn grayscale nếu ảnh gần như không có màu).
 
@@ -80,7 +83,7 @@ Mở [`drive_fetch.js`](drive_fetch.js), copy toàn bộ, dán vào Console, Ent
 
 Nếu thấy `Chua thay request /viewer/img` thì chưa có request ảnh nào: cuộn viewer 1–2 trang rồi dán lại.
 
-### Bước 3 — kiểm tra 3 trang đầu
+### Bước 3 — kiểm tra nhanh (không bắt buộc)
 
 ```js
 await __dl.test()
@@ -88,31 +91,40 @@ await __dl.test()
 
 Phải thấy `HTTP 200` kèm `image/webp` hoặc `image/png`. Nếu ra `403` thì token phiên đã hết hạn — F5 trang và làm lại từ Bước 1.
 
-### Bước 4 — tải toàn bộ
+### Bước 4 — chạy một lệnh duy nhất
 
 ```js
-await __dl.run()
+await __dl.go()
 ```
 
-Kỳ vọng: `XONG 630/630 | 43.6s | loi: 0`.
+Một lệnh làm hết: **tải song song → tự thử lại các trang lỗi (3 vòng, chờ 3s → 6s → 12s) → đóng gói và tải ZIP về.**
 
-Nếu có trang lỗi, chạy lại phần còn thiếu:
+Kỳ vọng:
+
+```
+[__dl] Bat dau: 630 trang | conc 6 | toi da 3 vong thu lai
+[__dl] 630/630 | 43.6s | 14.4 trang/s
+[__dl] Da luu sach_1-630.zip | 40.2 MB | 630 trang
+[__dl] HOAN TAT 630/630 | 43.6s
+```
+
+Nếu sau 3 vòng vẫn còn trang thiếu, script dừng, in danh sách trang thiếu và **không lưu ZIP**. Chạy lại `await __dl.go()` — nó chỉ tải đúng những trang còn thiếu rồi mới lưu.
+
+Gộp tuỳ chọn vào cùng một lệnh:
 
 ```js
-await __dl.retry()
+await __dl.go({ total: 630, conc: 8, rounds: 4, quality: [1600, false] })
 ```
 
-`retry()` chỉ tải lại đúng các trang chưa có, chạy tuần tự để tránh bị chặn.
+| Khoá | Mặc định | Ý nghĩa |
+|---|---|---|
+| `total` | `630` | số trang của tài liệu |
+| `conc` | `6` | số request song song |
+| `rounds` | `3` | số vòng thử lại trang lỗi |
+| `quality` | — | `[w, webp]`, ví dụ `[1600, false]` |
+| `save` | `true` | đặt `false` để chỉ tải, không tự lưu ZIP |
 
-### Bước 5 — lưu ZIP
-
-```js
-await __dl.save()
-```
-
-Trình duyệt tải về `sach_1-630.zip` (khoảng 40 MB với 630 trang ở `w=800`). Nếu còn trang thiếu, script in cảnh báo trước khi lưu.
-
-### Bước 6 — ghép thành PDF
+### Bước 5 — ghép thành PDF
 
 ```bash
 python build_pdf.py "sach_1-630.zip" "sach.pdf"
@@ -144,8 +156,15 @@ pdf-on-drive-downloader/
 Đổi bằng:
 
 ```js
+await __dl.go({ quality: [1600, false] })
+```
+
+Hoặc đổi thủ công rồi mới chạy:
+
+```js
 __dl.setQuality(1600, false)
 await __dl.test()   // xác nhận server trả đúng cỡ
+await __dl.go()
 ```
 
 `SCALE` trong `build_pdf.py` quyết định khổ trang: `0.75` nghĩa là 1 px = 0,75 pt (96 dpi), tức trang 800 × 1035 px thành 600 × 776 pt. Script giữ đúng tỉ lệ nên thường không cần sửa.
@@ -158,12 +177,12 @@ await __dl.test()   // xác nhận server trả đúng cỡ
 |---|---|---|
 | `Chua thay request /viewer/img` | Chưa có request ảnh nào | Cuộn 1–2 trang rồi dán lại |
 | `HTTP 403` | Token phiên hết hạn | F5, làm lại từ Bước 1 |
-| `HTTP 429`, nhiều trang lỗi | Gửi quá nhiều request | `__dl.conc = 3` rồi `await __dl.retry()` |
+| `HTTP 429`, nhiều trang lỗi | Gửi quá nhiều request | `go()` tự giảm tốc và thử lại; nếu vẫn lỗi, chạy `await __dl.go({ conc: 3 })` |
 | `__dl is not defined` | Sai frame, hoặc đã F5 | Chọn lại frame, dán lại script |
 | `setQuality` xong test vẫn ra cỡ cũ | Bản script cũ đóng gói biến cục bộ | Dùng `drive_fetch.js` trong repo này |
 | ZIP tải về 0 KB | Chrome chặn tải tự động | Cho phép `[*.]drive.google.com` trong `chrome://settings/content/automaticDownloads` |
 | PDF mở ra trắng trang | ZIP thiếu/hỏng | Kiểm tra số entry trong ZIP có đúng `total` không |
-| PDF thiếu trang | `retry()` chưa chạy hết | Chạy `__dl.status()` xem còn thiếu bao nhiêu, rồi `__dl.save()` lại |
+| Chạy mãi vẫn thiếu vài trang cuối | `total` lớn hơn số trang thật | `go()` in cảnh báo khi các trang thiếu nằm liền nhau ở cuối; giảm `total` rồi chạy lại |
 
 Với tài liệu render bằng canvas (không có endpoint `/viewer/img`), dùng chế độ dự phòng: chặn lúc blob được tạo ra.
 
@@ -193,6 +212,21 @@ Sau đó cuộn từ đầu đến cuối tài liệu rồi `await __dl.save()`.
 
 ---
 
+## Dùng thủ công (nếu cần)
+
+`go()` là cách nhanh nhất, nhưng từng bước vẫn gọi riêng được:
+
+| Lệnh | Việc |
+|---|---|
+| `await __dl.go(opts)` | tải → tự thử lại → tự lưu ZIP, một lệnh |
+| `await __dl.run()` | chỉ tải, không thử lại, không lưu |
+| `await __dl.retry()` | thử lại các trang còn thiếu với tốc độ thấp hơn |
+| `await __dl.save()` | đóng gói và tải ZIP từ những gì đang có |
+| `__dl.status()` | in số trang đã có / còn thiếu |
+| `await __dl.test()` | kiểm tra 3 trang đầu: HTTP status, content-type, dung lượng |
+
+---
+
 ## Giới hạn đã biết
 
 - ZIP được tạo theo chuẩn ZIP32: tối đa 65.535 trang và 4 GB. Vượt mức đó phải chia nhỏ.
@@ -202,6 +236,7 @@ Sau đó cuộn từ đầu đến cuối tài liệu rồi `await __dl.save()`.
 - Ảnh nằm trong RAM của tab trong suốt quá trình, nên tài liệu rất lớn (hơn ~1.500 trang ở `w=1600`) có thể làm tab nặng.
 - `build_pdf.py` lấy **toàn bộ chữ số** trong tên file làm số trang, nên tên file trong ZIP phải chứa đúng một nhóm số (`trang_001.webp` ✅, `page_12_v2.png` ❌ → ra 122). Script của repo này đặt tên đúng chuẩn đó.
 - Mỗi tài liệu mới chỉ cần đổi `total`; mọi thứ khác giữ nguyên.
+- `go()` chỉ lưu ZIP khi đã đủ trang. Muốn lưu bản thiếu để xem trước, gọi `await __dl.save()` — script vẫn in cảnh báo số trang thiếu.
 
 ---
 

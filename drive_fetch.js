@@ -4,10 +4,13 @@
  * Dùng: mở tài liệu dạng /preview → F12 → Console → chọn đúng frame của viewer
  * (xem README, Bước 1) → dán toàn bộ file này → sửa `total` → chạy:
  *
- *     await __dl.test()    // kiểm tra 3 trang đầu
- *     await __dl.run()     // tải toàn bộ
- *     await __dl.save()    // đóng gói ZIP và tải về
+ *     await __dl.go()
  *
+ * Một lệnh duy nhất: tải song song, tự thử lại các trang lỗi (giảm tốc độ dần),
+ * rồi đóng gói ZIP và tải về. Nếu vẫn còn trang thiếu sau các vòng thử lại,
+ * script dừng và không lưu ZIP hỏng.
+ *
+ * Tuỳ chọn: await __dl.go({ total: 630, conc: 8, rounds: 4, quality: [1600, false] })
  * Ảnh chỉ nằm trong RAM của tab, không upload đi đâu.
  * ------------------------------------------------------------------------- */
 (() => {
@@ -15,32 +18,32 @@
     total: 630,   // số trang của tài liệu — sửa cho từng file
     conc: 6,      // số request song song — đừng vượt 12
     list: [],     // list[i] = trang thứ i+1; undefined = chưa tải được
-    fail: [],     // số trang lỗi ở lần chạy gần nhất
+    fail: [],     // số trang lỗi ở lần tải gần nhất
     base: null,   // phần URL đứng trước số trang
     suffix: '',   // phần URL đứng sau số trang
   });
 
-  // --- 1. Lấy URL mẫu từ request mà viewer đã phát ra -----------------------
-  for (const entry of performance.getEntriesByType('resource')) {
-    const m = entry.name.match(
-      /^(https:\/\/drive\.google\.com\/viewer\/img\?.*[?&]page=)(\d+)(&.*)?$/
-    );
-    if (m) {
-      cap.base = m[1];
-      cap.suffix = m[3] || '';
-      break;
-    }
-  }
-  if (!cap.base) {
-    console.warn('[__dl] Chua thay request /viewer/img. Cuon 1-2 trang roi dan lai.');
-    return;
-  }
-
-  // --- 2. Tiện ích ----------------------------------------------------------
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const url = (i) => cap.base + i + cap.suffix;
   const extOf = (type) => (type.split('/')[1] || 'png').replace('jpeg', 'jpg');
   const have = () => cap.list.filter(Boolean).length;
 
+  // --- 1. Tìm URL mẫu trong các request mà viewer đã phát ra ----------------
+  function resolveBase() {
+    for (const entry of performance.getEntriesByType('resource')) {
+      const m = entry.name.match(
+        /^(https:\/\/drive\.google\.com\/viewer\/img\?.*[?&]page=)(\d+)(&.*)?$/
+      );
+      if (m) {
+        cap.base = m[1];
+        cap.suffix = m[3] || '';
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // --- 2. Tiện ích ----------------------------------------------------------
   cap.missing = () => {
     const out = [];
     for (let i = 0; i < cap.total; i += 1) if (!cap.list[i]) out.push(i + 1);
@@ -77,6 +80,29 @@
     await Promise.all(workers);
   }
 
+  // Tải một danh sách chỉ số trang, có in tiến độ. Trả về số giây đã dùng.
+  async function downloadIndices(indices) {
+    const t0 = performance.now();
+    let done = 0;
+    await pool(indices.length, cap.conc, async (k) => {
+      const i = indices[k];
+      try {
+        cap.list[i] = await fetchPage(i);
+      } catch (err) {
+        cap.fail.push(i + 1);
+      }
+      done += 1;
+      if (done % 50 === 0 || done === indices.length) {
+        const s = (performance.now() - t0) / 1000;
+        console.log(
+          `[__dl] ${done}/${indices.length} | ${s.toFixed(1)}s | ` +
+          `${(done / s).toFixed(1)} trang/s`
+        );
+      }
+    });
+    return (performance.now() - t0) / 1000;
+  }
+
   // --- 3. Kiểm tra nhanh ----------------------------------------------------
   cap.test = async (n = 3) => {
     for (let i = 0; i < Math.min(n, cap.total); i += 1) {
@@ -101,60 +127,96 @@
     console.log('[__dl] suffix moi:', cap.suffix);
   };
 
-  // --- 5. Tải toàn bộ -------------------------------------------------------
+  // --- 5. Tải toàn bộ (không thử lại) ---------------------------------------
   cap.run = async (from = 0, to = cap.total) => {
+    const indices = [];
+    for (let i = from; i < Math.min(to, cap.total); i += 1) indices.push(i);
     cap.fail = [];
-    const t0 = performance.now();
-    let done = 0;
-
-    await pool(to - from, cap.conc, async (k) => {
-      const i = from + k;
-      try {
-        cap.list[i] = await fetchPage(i);
-      } catch (err) {
-        cap.fail.push(i + 1);
-      }
-      done += 1;
-      if (done % 50 === 0) {
-        const s = (performance.now() - t0) / 1000;
-        console.log(
-          `[__dl] ${done}/${to - from} | ${s.toFixed(1)}s | ` +
-          `${(done / s).toFixed(1)} trang/s`
-        );
-      }
-    });
-
-    const s = (performance.now() - t0) / 1000;
+    const s = await downloadIndices(indices);
     console.log(`[__dl] XONG ${have()}/${cap.total} | ${s.toFixed(1)}s | loi: ${cap.fail.length}`);
     if (cap.fail.length && cap.fail.length <= 40) {
       console.log('[__dl] trang loi:', cap.fail.join(', '));
     }
   };
 
-  // --- 6. Thử lại các trang còn thiếu (tuần tự, tránh bị chặn) --------------
-  cap.retry = async () => {
+  // --- 6. Thử lại các trang còn thiếu với tốc độ thấp hơn -------------------
+  cap.retry = async (conc = 2) => {
     const bad = cap.missing();
     if (!bad.length) {
       console.log('[__dl] Khong con trang nao thieu.');
-      return;
+      return 0;
     }
-    console.log(`[__dl] Thu lai ${bad.length} trang...`);
+    const saved = cap.conc;
+    cap.conc = Math.max(1, Math.min(conc, saved));
     cap.fail = [];
-    for (const pageNo of bad) {
-      const i = pageNo - 1;
-      try {
-        cap.list[i] = await fetchPage(i);
-      } catch (err) {
-        cap.fail.push(pageNo);
-      }
+    try {
+      await downloadIndices(bad.map((p) => p - 1));
+    } finally {
+      cap.conc = saved;
     }
-    console.log(`[__dl] Con thieu ${cap.fail.length} trang`);
-    if (cap.fail.length && cap.fail.length <= 40) {
-      console.log('[__dl] trang loi:', cap.fail.join(', '));
-    }
+    const left = cap.missing().length;
+    console.log(`[__dl] Thu lai ${bad.length} trang | con thieu ${left}`);
+    return left;
   };
 
-  // --- 7. Đóng gói ZIP ngay trong trình duyệt -------------------------------
+  // --- 7. Một lệnh làm hết: tải → thử lại → lưu -----------------------------
+  cap.go = async (opts = {}) => {
+    const o = { total: 0, conc: 0, rounds: 3, save: true, quality: null, ...opts };
+    if (o.total) cap.total = o.total;
+    if (o.conc) cap.conc = o.conc;
+    if (o.quality) cap.setQuality(o.quality[0], o.quality[1]);
+
+    if (!cap.base && !resolveBase()) {
+      console.warn('[__dl] Chua thay URL /viewer/img. Cuon 1-2 trang trong viewer roi chay lai.');
+      return { ok: false, reason: 'no-url' };
+    }
+
+    const t0 = performance.now();
+    console.log(
+      `[__dl] Bat dau: ${cap.total} trang | conc ${cap.conc} | ` +
+      `toi da ${o.rounds} vong thu lai`
+    );
+
+    cap.fail = [];
+    const todo = [];
+    for (let i = 0; i < cap.total; i += 1) if (!cap.list[i]) todo.push(i);
+    if (todo.length) await downloadIndices(todo);
+
+    let round = 0;
+    while (cap.missing().length && round < o.rounds) {
+      round += 1;
+      const wait = Math.min(3000 * 2 ** (round - 1), 15000);
+      console.log(
+        `[__dl] Vong ${round}/${o.rounds}: thieu ${cap.missing().length} trang, ` +
+        `doi ${Math.round(wait / 1000)}s roi thu lai`
+      );
+      await sleep(wait);
+      if (!(await cap.retry(2))) break;
+    }
+
+    const missing = cap.missing();
+    const seconds = +((performance.now() - t0) / 1000).toFixed(1);
+
+    if (missing.length) {
+      console.warn(
+        `[__dl] DUNG sau ${seconds}s: con thieu ${missing.length} trang, chua luu ZIP. ` +
+        'Chay lai await __dl.go() de thu tiep (chi tai trang con thieu).'
+      );
+      if (missing.length <= 40) console.warn('[__dl] trang thieu:', missing.join(', '));
+      const tail = missing[missing.length - 1] === cap.total &&
+        missing.every((p, k) => k === 0 || p === missing[k - 1] + 1);
+      if (tail) {
+        console.warn('[__dl] Cac trang thieu nam lien nhau o cuoi: co the `total` dang lon hon so trang thuc te.');
+      }
+      return { ok: false, reason: 'missing', missing, seconds };
+    }
+
+    if (o.save) await cap.save();
+    console.log(`[__dl] HOAN TAT ${cap.total}/${cap.total} | ${seconds}s`);
+    return { ok: true, pages: cap.total, seconds };
+  };
+
+  // --- 8. Đóng gói ZIP ngay trong trình duyệt -------------------------------
   function crc32(u8) {
     let c = -1;
     for (let i = 0; i < u8.length; i += 1) {
@@ -221,7 +283,7 @@
     return new Blob([...parts, ...central, new Uint8Array(e.buffer)], { type: 'application/zip' });
   }
 
-  // --- 8. Lưu ---------------------------------------------------------------
+  // --- 9. Lưu ---------------------------------------------------------------
   cap.save = async (limit = Infinity) => {
     const items = cap.list.filter(Boolean).slice(0, limit);
     if (!items.length) {
@@ -254,5 +316,9 @@
     );
   };
 
-  console.log(`[__dl] San sang: ${cap.total} trang, conc ${cap.conc}. Chay: await __dl.test()`);
+  if (!resolveBase()) {
+    console.warn('[__dl] Chua thay URL /viewer/img. Cuon 1-2 trang roi chay: await __dl.go()');
+  } else {
+    console.log(`[__dl] San sang: ${cap.total} trang, conc ${cap.conc}. Chay: await __dl.go()`);
+  }
 })();
