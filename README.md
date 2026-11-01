@@ -35,6 +35,23 @@ Toàn bộ chạy trong RAM của tab. Nếu sau các vòng thử lại vẫn c�
 
 ---
 
+## Loại tài liệu dùng được
+
+Điều kiện duy nhất: viewer của Drive phải render trang thành **ảnh** để tải về.
+
+| Loại | Dùng được? | Ghi chú |
+|---|---|---|
+| PDF | ✅ | trường hợp chính, mỗi trang là một ảnh |
+| Ảnh (JPG/PNG/WebP) | ✅ | một trang duy nhất |
+| DOCX / PPTX / XLSX | ⚠️ | Drive chuyển sang bản PDF để preview nên thường chạy được, nhưng chỗ ngắt trang do Drive quyết định |
+| Google Docs / Slides | ⚠️ | dùng endpoint `docs.google.com/viewerng/img` — script đã chấp nhận cả hai dạng URL, nhưng tôi chưa kiểm chứng trên tài liệu thật |
+| Google Sheets | ⚠️ | chỉ phần bảng đang render; bảng rộng có thể bị cắt cột |
+| Video, audio, file nén, Google Forms | ❌ | không có viewer ảnh |
+
+Cách kiểm tra nhanh nhất: làm Bước 1, nếu **không frame nào** có `req` lớn hơn `0` thì loại tài liệu đó không dùng được — thử chế độ dự phòng ở mục *Xử lý sự cố* trước khi bỏ cuộc.
+
+---
+
 ## Yêu cầu
 
 - Chrome trên máy tính, có DevTools (F12).
@@ -59,10 +76,17 @@ Bước tải ảnh không cần cài gì thêm: mọi thứ chạy trong Chrome
 
 ### Bước 1 — mở đúng frame của viewer
 
-Mở tài liệu ở dạng `/preview`, ví dụ:
+Mở tài liệu ở dạng `/preview`. Với file trên Drive:
 
 ```
 https://drive.google.com/file/d/<id>/preview
+```
+
+Với Google Docs / Slides:
+
+```
+https://docs.google.com/document/d/<id>/preview
+https://docs.google.com/presentation/d/<id>/preview
 ```
 
 Bấm F12, sang tab **Console**. Dropdown chọn context ở góc trên bên trái đang ghi `top`; chọn lần lượt từng frame và chạy:
@@ -70,13 +94,13 @@ Bấm F12, sang tab **Console**. Dropdown chọn context ở góc trên bên tr�
 ```js
 ({
   url: location.href.slice(0, 60),
-  anh: document.querySelectorAll('img[src^="blob:"]').length,
+  imgs: document.querySelectorAll('img[src^="blob:"]').length,
   req: performance.getEntriesByType('resource')
-    .filter((e) => e.name.includes('/viewer/img')).length,
+    .filter((e) => e.name.includes('/viewer/img') || e.name.includes('/viewerng/img')).length,
 })
 ```
 
-Frame nào có `req` (hoặc `anh`) lớn hơn `0` là frame của viewer — ở lại frame đó.
+Frame nào có `req` (hoặc `imgs`) lớn hơn `0` là frame của viewer — ở lại frame đó.
 
 ### Bước 2 — dán script, thế là xong
 
@@ -84,8 +108,8 @@ Có hai bản, nội dung y hệt nhau:
 
 | Bản | Dùng khi nào |
 |---|---|
-| [`drive_fetch.min.js`](drive_fetch.min.js) | một dòng, 8 KB — bản đưa cho đồng nghiệp dán |
-| [`drive_fetch.js`](drive_fetch.js) | 446 dòng, có chú thích — bản để đọc và sửa |
+| [`drive_fetch.min.js`](drive_fetch.min.js) | một dòng, 8,3 KB — bản đưa cho đồng nghiệp dán |
+| [`drive_fetch.js`](drive_fetch.js) | 447 dòng, có chú thích — bản để đọc và sửa |
 
 Copy toàn bộ một trong hai, dán vào Console, Enter. **Không phải gõ thêm lệnh nào** — script tự:
 
@@ -214,13 +238,14 @@ await __dl.go()
 | `setQuality` xong test vẫn ra cỡ cũ | Bản script cũ đóng gói biến cục bộ | Dùng `drive_fetch.js` trong repo này |
 | ZIP tải về 0 KB | Chrome chặn tải tự động | Cho phép `[*.]drive.google.com` trong `chrome://settings/content/automaticDownloads` |
 | PDF mở ra trắng trang | ZIP thiếu/hỏng | Kiểm tra số entry trong ZIP có đúng `total` không |
+| `no file matched: ...` (build_pdf.py) | Sai đường dẫn ZIP | Kiểm tra lại, để trong dấu `"` nếu đường dẫn có khoảng trắng |
 | Chạy mãi vẫn thiếu vài trang cuối | `total` lớn hơn số trang thật | `go()` in cảnh báo khi các trang thiếu nằm liền nhau ở cuối; giảm `total` rồi chạy lại |
 
 Với tài liệu render bằng canvas (không có endpoint `/viewer/img`), dùng chế độ dự phòng: chặn lúc blob được tạo ra.
 
 ```js
 (() => {
-  if (!window.__dl) { console.warn('Dan drive_fetch.js truoc.'); return; }
+  if (!window.__dl) { console.warn('Load drive_fetch.js first.'); return; }
   const seen = (__dl._seen = __dl._seen || new Set());
   const orig = URL.createObjectURL.bind(URL);
   URL.createObjectURL = function (o) {
@@ -236,11 +261,11 @@ Với tài liệu render bằng canvas (không có endpoint `/viewer/img`), dùn
     } catch (e) {}
     return u;
   };
-  console.log('Da chan blob. Cuon het tai lieu roi await __dl.save()');
+  console.log('Blob hook installed. Scroll through the whole document, then await __dl.save()');
 })();
 ```
 
-Sau đó cuộn từ đầu đến cuối tài liệu rồi `await __dl.save()`. Cách này xếp trang theo thứ tự blob được tạo, nên phải cuộn một chiều và không biết được nếu sót trang — chỉ dùng khi Cách 1 không chạy được.
+Sau đó cuộn từ đầu đến cuối tài liệu rồi `await __dl.save()`. Cách này xếp trang theo thứ tự blob được tạo, nên phải cuộn một chiều và không biết được nếu sót trang — chỉ dùng khi cách chính không chạy được.
 
 ---
 
@@ -262,7 +287,7 @@ Sau đó cuộn từ đầu đến cuối tài liệu rồi `await __dl.save()`.
 ## Giới hạn đã biết
 
 - Script tự chạy ngay khi dán. Muốn nạp mà không chạy (để tự gọi `go()` với tham số), dán `window.__dlAutorun = false` trước rồi mới dán script.
-- Bước dò số trang tốn thêm khoảng log₂(N) request (630 trang ≈ 6 request), và những trang dò được giữ lại trong bộ nhớ — không tải hai lần.
+- Bước dò số trang tốn thêm khoảng `2·log₂(N)` request (630 trang ≈ 20 request), và những trang dò được giữ lại trong bộ nhớ — không tải hai lần.
 - ZIP được tạo theo chuẩn ZIP32: tối đa 65.535 trang và 4 GB. Vượt mức đó phải chia nhỏ.
 - Token `id`/`fssid` sống khoảng một giờ. Lấy được URL thì chạy luôn.
 - Đừng đóng tab khi đang chạy — mất `__dl` là mất toàn bộ ảnh đã tải.

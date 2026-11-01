@@ -1,34 +1,35 @@
 /* ---------------------------------------------------------------------------
- * drive_fetch.js — tải toàn bộ tài liệu Google Drive ở chế độ chỉ xem thành ZIP.
+ * drive_fetch.js — download a view-only Google Drive document as a ZIP.
  *
- * Dán là chạy: mở tài liệu dạng /preview → F12 → Console → chọn đúng frame của
- * viewer (xem README, Bước 1) → dán toàn bộ file này → Enter.
+ * Paste and it runs: open the document at /preview, F12, Console, pick the
+ * viewer frame (see README, Step 1), paste this whole file, press Enter.
  *
- * Script tự dò số trang, tải song song, tự thử lại các trang lỗi (chờ lâu dần,
- * giảm số request song song), rồi đóng gói ZIP và tải về. Không phải gõ thêm gì.
+ * The script detects the page count, downloads pages in parallel, retries the
+ * failed ones (longer waits, fewer parallel requests), then builds a ZIP and
+ * triggers the download. Nothing else to type.
  *
- * Cần điều khiển tay thì mọi thứ nằm trong __dl:
+ * Manual control lives on __dl:
  *     await __dl.go({ total: 630, conc: 8, rounds: 4, quality: [1600, false] })
- *     __dl.status()                  // đã có bao nhiêu trang, còn thiếu trang nào
- *     await __dl.diag()              // in URL mẫu + thử tải 2 trang, khi cần chẩn đoán
- *     window.__dlAutorun = false     // dán trước, nếu muốn nạp mà không tự chạy
+ *     __dl.status()                  // pages collected / pages missing
+ *     await __dl.diag()              // print the sampled URL and fetch 2 pages
+ *     window.__dlAutorun = false     // paste first to load without running
  *
- * Ảnh chỉ nằm trong RAM của tab, không upload đi đâu.
+ * Images stay in the tab's RAM; nothing is uploaded anywhere.
  * ------------------------------------------------------------------------- */
 (() => {
   const cap = (window.__dl = {
-    total: 0,     // 0 = tự dò số trang; đặt số cụ thể để bỏ qua bước dò
-    conc: 6,      // số request song song — đừng vượt 12
-    list: [],     // list[i] = trang thứ i+1; undefined = chưa tải được
-    fail: [],     // số trang lỗi ở lần tải gần nhất
-    base: null,   // phần URL đứng trước số trang
-    suffix: '',   // phần URL đứng sau số trang
+    total: 0,     // 0 = detect the page count; set a number to skip detection
+    conc: 6,      // parallel requests — keep it at 12 or below
+    list: [],     // list[i] = page i+1; undefined = not fetched yet
+    fail: [],     // page numbers that failed in the last pass
+    base: null,   // URL prefix before the page number
+    suffix: '',   // URL suffix after the page number
   });
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const url = (i) => cap.base + i + cap.suffix;
 
-  // Mọi request đều có timeout: một request treo không thể chặn cả lần chạy.
+  // Every request has a timeout, so one stalled fetch cannot block the run.
   function fetchOpts(ms) {
     const o = { credentials: 'include' };
     if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
@@ -39,11 +40,11 @@
   const extOf = (type) => (type.split('/')[1] || 'png').replace('jpeg', 'jpg');
   const have = () => cap.list.filter(Boolean).length;
 
-  // --- 1. Tìm URL mẫu trong các request mà viewer đã phát ra ----------------
+  // --- 1. Find the sample URL among the requests the viewer already made -----
   function resolveBase() {
     for (const entry of performance.getEntriesByType('resource')) {
       const m = entry.name.match(
-        /^(https:\/\/drive\.google\.com\/viewer\/img\?.*[?&]page=)(\d+)(&.*)?$/
+        /^(https:\/\/(?:drive|docs)\.google\.com\/(?:viewer|viewerng)\/img\?.*[?&]page=)(\d+)(&.*)?$/
       );
       if (m) {
         cap.base = m[1];
@@ -54,7 +55,7 @@
     return false;
   }
 
-  // --- 2. Tiện ích ----------------------------------------------------------
+  // --- 2. Helpers ------------------------------------------------------------
   cap.missing = () => {
     const out = [];
     for (let i = 0; i < cap.total; i += 1) if (!cap.list[i]) out.push(i + 1);
@@ -91,7 +92,7 @@
     await Promise.all(workers);
   }
 
-  // Tải một danh sách chỉ số trang, có in tiến độ. Trả về số giây đã dùng.
+  // Fetch a list of page indices with progress output. Returns elapsed seconds.
   async function downloadIndices(indices) {
     const t0 = performance.now();
     let done = 0;
@@ -114,7 +115,7 @@
     return (performance.now() - t0) / 1000;
   }
 
-  // --- 3. Kiểm tra nhanh ----------------------------------------------------
+  // --- 3. Quick check --------------------------------------------------------
   cap.test = async (n = 3) => {
     const to = Math.min(n, cap.total || n);
     for (let i = 0; i < to; i += 1) {
@@ -131,7 +132,7 @@
     }
   };
 
-  // --- 4. Đổi độ phân giải --------------------------------------------------
+  // --- 4. Change the resolution ----------------------------------------------
   cap.setQuality = (w, webp) => {
     cap.suffix = cap.suffix
       .replace(/\bw=\d+/, `w=${w}`)
@@ -139,7 +140,7 @@
     console.log('[__dl] new suffix:', cap.suffix);
   };
 
-  // --- 5. Tải toàn bộ (không thử lại) ---------------------------------------
+  // --- 5. Download everything (no retries) -----------------------------------
   cap.run = async (from = 0, to = cap.total) => {
     const indices = [];
     for (let i = from; i < Math.min(to, cap.total); i += 1) indices.push(i);
@@ -151,7 +152,7 @@
     }
   };
 
-  // --- 6. Thử lại các trang còn thiếu với tốc độ thấp hơn -------------------
+  // --- 6. Retry the missing pages at a lower rate ----------------------------
   cap.retry = async (conc = 2) => {
     const bad = cap.missing();
     if (!bad.length) {
@@ -171,9 +172,9 @@
     return left;
   };
 
-  // --- 7. Dò số trang bằng cách thăm dò endpoint ----------------------------
-  // true = trang i đọc được (lưu luôn vào list), false = đã qua trang cuối.
-  // 429/5xx/lỗi mạng = không kết luận được: ném ra để dò dừng, tránh cắt cụt.
+  // --- 7. Detect the page count by probing the endpoint ----------------------
+  // true = page i exists (and is stored in the list), false = past the last page.
+  // 429/5xx/network errors = inconclusive: throw so detection stops instead of truncating.
   async function probePage(i, tries = 2) {
     let status = 0;
     for (let t = 0; t < tries; t += 1) {
@@ -196,7 +197,7 @@
           status = r.status;
         } else {
           console.log(`[__dl] ... page ${i}: end of document (HTTP ${r.status})`);
-          return false;   // 400/404/410...: đã qua trang cuối
+          return false;   // 400/404/410...: past the last page
         }
       } catch (err) {
         if (err.fatal) throw err;
@@ -241,7 +242,7 @@
     }
   };
 
-  // --- 8. Một lệnh làm hết: dò số trang → tải → thử lại → lưu ---------------
+  // --- 8. One-shot: detect pages -> download -> retry -> save -----------------
   cap.go = async (opts = {}) => {
     const o = { total: 0, conc: 0, rounds: 3, save: true, quality: null, ...opts };
     if (o.total) cap.total = o.total;
@@ -309,7 +310,7 @@
     return { ok: true, pages: cap.total, seconds };
   };
 
-  // --- 8. Đóng gói ZIP ngay trong trình duyệt -------------------------------
+  // --- 9. Build the ZIP inside the browser -----------------------------------
   function crc32(u8) {
     let c = -1;
     for (let i = 0; i < u8.length; i += 1) {
@@ -337,7 +338,7 @@
       const lh = new DataView(new ArrayBuffer(30));
       lh.setUint32(0, 0x04034b50, true);
       lh.setUint16(4, 20, true);
-      lh.setUint16(6, 0x0800, true);   // tên file UTF-8
+      lh.setUint16(6, 0x0800, true);   // UTF-8 file name
       lh.setUint16(10, t, true);
       lh.setUint16(12, dt, true);
       lh.setUint32(14, crc, true);
@@ -376,7 +377,7 @@
     return new Blob([...parts, ...central, new Uint8Array(e.buffer)], { type: 'application/zip' });
   }
 
-  // --- 9. Lưu ---------------------------------------------------------------
+  // --- 10. Save --------------------------------------------------------------
   cap.save = async (limit = Infinity) => {
     const items = cap.list.filter(Boolean).slice(0, limit);
     if (!items.length) {
@@ -409,11 +410,11 @@
     );
   };
 
-  // --- 9b. Chẩn đoán nhanh ----------------------------------------------------
+  // --- 11. Diagnostics -------------------------------------------------------
   cap.diag = async () => {
     if (!cap.base) resolveBase();
     const entries = performance.getEntriesByType('resource')
-      .filter((e) => e.name.includes('/viewer/img'));
+      .filter((e) => e.name.includes('/viewer/img') || e.name.includes('/viewerng/img'));
     console.log('[__dl] /viewer/img resource entries in this frame:', entries.length);
     console.log('[__dl] base:', cap.base);
     console.log('[__dl] suffix:', cap.suffix);
@@ -429,7 +430,7 @@
     }
   };
 
-  // --- 10. Tự chạy -----------------------------------------------------------
+  // --- 12. Autorun -----------------------------------------------------------
   if (!resolveBase()) {
     console.log('[__dl] No /viewer/img request in this frame. Select the viewer frame and paste again.');
     return;

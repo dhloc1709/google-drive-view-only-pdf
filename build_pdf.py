@@ -1,17 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Ghep cac file zip anh trang thanh mot PDF duy nhat.
+"""Merge page-image ZIP files into a single PDF.
 
-Dung:
-    python build_pdf.py "<glob>" "<file-ra.pdf>"
+Usage:
+    python build_pdf.py "<glob>" "<output.pdf>"
 
-Vi du:
-    python build_pdf.py "C:\\Users\\Hoang Loc\\Downloads\\sach_1-630.zip" "%USERPROFILE%\\Downloads\\sach.pdf"
+Examples:
+    python build_pdf.py "C:\\Users\\me\\Downloads\\sach_1-630.zip" "sach.pdf"
+    python build_pdf.py "sach_*.zip" "sach.pdf"
 
-Dac diem:
-  - Trang goc la PNG 8-bit khong chen dong duoc nhung NGUYEN luong nen vao PDF
-    (/FlateDecode + /Predictor 15), khong giai ma, khong mat du lieu.
-  - Trang WEBP hoac JPEG duoc giai ma va ma hoa lai thanh JPEG.
-  - Tu tim so trang tu noi dung zip, khong can khai bao.
+How it works:
+  - Pages that are plain 8-bit PNG (no interlace, no transparency) are embedded
+    byte for byte: the PNG IDAT stream already matches PDF's /Predictor 15
+    filter, so it is written straight through as /FlateDecode, without decoding
+    and without losing a single pixel.
+  - Pages that are WEBP or JPEG, or 16-bit or transparent PNG, are decoded and
+    re-encoded as JPEG.
+  - The page number is taken from the digits in each file name.
 """
 import glob
 import io
@@ -23,11 +27,11 @@ import zipfile
 import numpy as np
 from PIL import Image
 
-SCALE = 0.75  # 1 px = 0.75 pt, tuc 96 dpi. Trang 800x1035 thanh 600x776 pt.
+SCALE = 0.75  # 1 px = 0.75 pt (96 dpi): 800x1035 px becomes 600x776 pt.
 
 
 def png_stream(data):
-    """Tra ve thong so neu la PNG 8-bit, khong chen dong, khong trong suot."""
+    """Return (w, h, bits, ctype, idat) for a plain 8-bit PNG, else None."""
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         return None
     pos, idat = 8, []
@@ -58,7 +62,7 @@ def main():
 
     paths = sorted(glob.glob(pattern))
     if not paths:
-        print(f"Khong tim thay file nao khop: {pattern}")
+        print(f"no file matched: {pattern}")
         return 1
 
     blobs, dup = {}, []
@@ -74,13 +78,13 @@ def main():
 
     nums = sorted(blobs)
     if dup:
-        print(f"CANH BAO: {len(dup)} trang bi trung giua cac zip, giu ban doc sau cung: {sorted(set(dup))[:15]}")
+        print(f"WARNING: {len(dup)} duplicate pages across zips, keeping the last copy read: {sorted(set(dup))[:15]}")
     gap = [i for i in range(nums[0], nums[-1] + 1) if i not in blobs]
     total = nums[-1]
     if gap:
-        print(f"CANH BAO: thieu {len(gap)} trang: {gap[:20]}")
+        print(f"WARNING: {len(gap)} missing pages: {gap[:20]}")
 
-    print(f"{len(paths)} zip | {len(nums)} trang | {sum(len(v) for v in blobs.values()) / 1048576:.1f} MB")
+    print(f"{len(paths)} zip | {len(nums)} pages | {sum(len(v) for v in blobs.values()) / 1048576:.1f} MB")
 
     enc = []
     n_png = n_jpg = 0
@@ -118,9 +122,9 @@ def main():
             n_jpg += 1
 
         if n % 100 == 0:
-            print(f"  xu ly {n}/{total}")
+            print(f"  page {n}/{total}")
 
-    print(f"nhung nguyen PNG: {n_png} | ma hoa lai JPEG: {n_jpg}")
+    print(f"PNG passed through: {n_png} | re-encoded as JPEG: {n_jpg}")
     blobs.clear()
 
     out = bytearray(b"%PDF-1.5\n%\xe2\xe3\xcf\xd3\n")
@@ -170,7 +174,7 @@ def main():
 
     with open(out_path, "wb") as f:
         f.write(out)
-    print(f"ghi {out_path} | {len(out) / 1048576:.1f} MB | {len(enc)} trang")
+    print(f"wrote {out_path} | {len(out) / 1048576:.1f} MB | {len(enc)} pages")
     return 0
 
 
