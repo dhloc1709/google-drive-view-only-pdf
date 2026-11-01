@@ -1,0 +1,9 @@
+# Ảnh trang và PDF kết quả: không đưa lên GitHub
+*.zip
+*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
