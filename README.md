@@ -80,7 +80,14 @@ Frame nào có `req` (hoặc `anh`) lớn hơn `0` là frame của viewer — �
 
 ### Bước 2 — dán script, thế là xong
 
-Copy toàn bộ [`drive_fetch.js`](drive_fetch.js) rồi dán vào Console, Enter. **Không phải gõ thêm lệnh nào** — script tự:
+Có hai bản, nội dung y hệt nhau:
+
+| Bản | Dùng khi nào |
+|---|---|
+| [`drive_fetch.min.js`](drive_fetch.min.js) | một dòng, 8 KB — bản đưa cho đồng nghiệp dán |
+| [`drive_fetch.js`](drive_fetch.js) | 411 dòng, có chú thích — bản để đọc và sửa |
+
+Copy toàn bộ một trong hai, dán vào Console, Enter. **Không phải gõ thêm lệnh nào** — script tự:
 
 1. dò số trang (khoảng 10–20 request thăm dò, không tải ảnh thừa),
 2. tải song song toàn bộ trang,
@@ -102,6 +109,10 @@ Kỳ vọng (bước dò in từng lần thử, nên không bị "đứng im"):
 [__dl] Da luu sach_1-630.zip | 40.2 MB | 630 trang
 [__dl] HOAN TAT 630/630 | 43.6s
 ```
+
+Dòng `undefined` hiện ngay sau khi dán là giá trị trả về của đoạn code — không phải lỗi, các dòng log vẫn chạy tiếp bên dưới nó.
+
+ZIP nằm trong thư mục Downloads. Với tài liệu khác: F5 trang, chọn lại frame rồi dán lại — không cần giữ gì từ lần trước.
 
 Lần đầu dán, Chrome có thể chặn vì "dán code lạ" — làm theo hướng dẫn của nó (gõ `allow pasting`) rồi dán lại.
 
@@ -148,10 +159,17 @@ Kết quả: file PDF 630 trang, mỗi trang đúng tỉ lệ ảnh gốc.
 
 ```
 pdf-on-drive-downloader/
-├─ README.md          # file này
-├─ drive_fetch.js     # đoạn script dán vào DevTools Console
-├─ build_pdf.py       # ghép các zip ảnh thành PDF
-└─ .gitignore         # không đưa *.zip, *.pdf lên repo
+├─ README.md           # file này
+├─ drive_fetch.js      # script đầy đủ, có chú thích (để đọc và sửa)
+├─ drive_fetch.min.js  # cùng script, nén một dòng (để dán)
+├─ build_pdf.py        # ghép các zip ảnh thành PDF
+└─ .gitignore          # không đưa *.zip, *.pdf lên repo
+```
+
+Bản `.min.js` sinh lại sau mỗi lần sửa bằng:
+
+```bash
+npx -y terser drive_fetch.js -c -m -o drive_fetch.min.js
 ```
 
 ---
