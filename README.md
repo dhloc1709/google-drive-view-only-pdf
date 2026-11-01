@@ -1,6 +1,9 @@
-# Tải tài liệu Google Drive "chỉ xem" thành PDF
+# Download Google Drive "view only" documents as PDF
 
-Công cụ cá nhân gồm hai phần:
+Fetch every preview page of a view-only Google Drive file, then rebuild a lossless
+PDF or keep the pages as a ZIP. Works with PDF, Google Docs and Slides previews.
+
+**Tải tài liệu Google Drive chỉ xem thành PDF.** Công cụ cá nhân gồm hai phần:
 
 1. **`drive_fetch.js`** — đoạn JavaScript dán vào DevTools Console. Một lần dán là chạy: tự dò số trang, tải toàn bộ các trang của tài liệu Drive, tự thử lại chỗ lỗi rồi đóng gói ZIP ngay trong trình duyệt.
 2. **`build_pdf.py`** — script Python ghép các ảnh trang đó thành một file PDF duy nhất, giữ nguyên chất lượng ảnh gốc.
@@ -63,8 +66,8 @@ Cách kiểm tra nhanh nhất: làm Bước 1, nếu **không frame nào** có `
 ## Cài đặt
 
 ```bash
-git clone https://github.com/dhloc1709/pdf-on-drive-downloader.git
-cd pdf-on-drive-downloader
+git clone https://github.com/dhloc1709/google-drive-view-only-pdf.git
+cd google-drive-view-only-pdf
 python -m pip install pillow numpy
 ```
 
@@ -182,7 +185,7 @@ Kết quả: file PDF 630 trang, mỗi trang đúng tỉ lệ ảnh gốc.
 ## Cấu trúc repo
 
 ```
-pdf-on-drive-downloader/
+google-drive-view-only-pdf/
 ├─ README.md           # file này
 ├─ drive_fetch.js      # script đầy đủ, có chú thích (để đọc và sửa)
 ├─ drive_fetch.min.js  # cùng script, nén một dòng (để dán)
